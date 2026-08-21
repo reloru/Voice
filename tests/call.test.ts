@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RealtimeCall } from "../src/realtime/call.js";
+import { connectWithWs } from "../src/realtime/node-socket.js";
 import { parseAgentConfig, type AgentConfig } from "../src/config/agent.js";
-import { CallStore } from "../src/storage/calls.js";
+import { FileCallStore } from "../src/storage/file.js";
 import type { XaiClient } from "../src/xai/client.js";
 import {
   FakeRealtimeServer,
@@ -21,7 +22,7 @@ describe("RealtimeCall", () => {
   let server: FakeRealtimeServer;
   let url: string;
   let dir: Awaited<ReturnType<typeof tempDir>>;
-  let store: CallStore;
+  let store: FileCallStore;
   let notifier: RecordingNotifier;
   let xai: { referCall: ReturnType<typeof vi.fn>; hangupCall: ReturnType<typeof vi.fn> };
 
@@ -36,13 +37,14 @@ describe("RealtimeCall", () => {
       logger: silentLogger,
       realtimeUrl: url,
       apiKey: "xai-test",
+      connect: connectWithWs,
     });
 
   beforeEach(async () => {
     server = new FakeRealtimeServer();
     url = await server.start();
     dir = await tempDir();
-    store = new CallStore(dir.path);
+    store = new FileCallStore(dir.path);
     notifier = new RecordingNotifier();
     xai = {
       referCall: vi.fn().mockResolvedValue(undefined),

@@ -319,8 +319,8 @@ async function simulateCall(argv: Argv): Promise<number> {
     const timestamp = Math.floor(Date.now() / 1000);
     headers["webhook-id"] = id;
     headers["webhook-timestamp"] = String(timestamp);
-    headers["webhook-signature"] =
-      `v1,${computeSignature(decodeSigningSecret(secret), id, timestamp, body)}`;
+    const signature = await computeSignature(decodeSigningSecret(secret), id, timestamp, body);
+    headers["webhook-signature"] = `v1,${signature}`;
   } else {
     console.log("No signing secret available — sending unsigned.");
   }

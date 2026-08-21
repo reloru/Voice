@@ -1,0 +1,40 @@
+name = "voice-agent"
+main = "worker/index.ts"
+compatibility_date = "2026-08-01"
+# zod and yaml reach for a few Node built-ins.
+compatibility_flags = ["nodejs_compat"]
+
+workers_dev = true
+observability = { enabled = true }
+
+# Call records and taken messages. Also holds the live agent config under
+# "agent.yaml", so the persona can be changed without a redeploy.
+[[kv_namespaces]]
+binding = "VOICE_KV"
+id = "ae08c9cda46a4d2aa1adce75d44d5bcc"
+
+# One instance per call_id. A plain Worker invocation cannot hold a WebSocket
+# open for the length of a phone call; a Durable Object can.
+[[durable_objects.bindings]]
+name = "CALL_SESSION"
+class_name = "CallSession"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["CallSession"]
+
+# Bundles agent.example.yaml as a string, so a fresh deploy has a valid config
+# before anything has been written to KV.
+[[rules]]
+type = "Text"
+globs = ["**/*.yaml"]
+fallthrough = true
+
+[vars]
+LOG_LEVEL = "info"
+
+# Secrets are set out of band and never live in this file:
+#   wrangler secret put XAI_API_KEY
+#   wrangler secret put XAI_WEBHOOK_SECRET
+#   wrangler secret put DASHBOARD_TOKEN
+#   wrangler secret put NOTIFY_WEBHOOK_URL   (optional)

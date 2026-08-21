@@ -3,7 +3,8 @@ import { buildToolDefinitions, dispatchTool, type ToolContext } from "../src/age
 import { buildInstructions } from "../src/agent/persona.js";
 import type { TakenMessage } from "../src/agent/types.js";
 import { parseAgentConfig, type AgentConfig } from "../src/config/agent.js";
-import { CallStore } from "../src/storage/calls.js";
+import { FileCallStore } from "../src/storage/file.js";
+import type { CallStore } from "../src/storage/store.js";
 import {
   MINIMAL_CONFIG_YAML,
   RecordingNotifier,
@@ -49,7 +50,7 @@ describe("buildToolDefinitions", () => {
 
 describe("dispatchTool", () => {
   let dir: Awaited<ReturnType<typeof tempDir>>;
-  let store: CallStore;
+  let store: FileCallStore;
   let notifier: RecordingNotifier;
   let hangups: string[];
   let transfers: { targetUri: string; reason: string }[];
@@ -69,7 +70,7 @@ describe("dispatchTool", () => {
 
   beforeEach(async () => {
     dir = await tempDir();
-    store = new CallStore(dir.path);
+    store = new FileCallStore(dir.path);
     notifier = new RecordingNotifier();
     hangups = [];
     transfers = [];

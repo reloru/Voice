@@ -1,16 +1,16 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { CallRecord, TakenMessage } from "../agent/types.js";
+import type { CallStore } from "./store.js";
 
 /**
  * Append-only JSONL storage for call records and messages.
  *
  * Deliberately boring: a phone agent that loses a message because a database
  * was unreachable is worse than useless, and one file append per call is
- * durable, greppable, and trivial to back up. Swap this class out if you want
- * a real database — the rest of the app only depends on this interface.
+ * durable, greppable, and trivial to back up.
  */
-export class CallStore {
+export class FileCallStore implements CallStore {
   readonly #dir: string;
   #ready?: Promise<void>;
 

@@ -45,19 +45,20 @@ export function testEnv(overrides: Partial<Env> = {}): Env {
 }
 
 /** Builds the headers xAI would send for a given body. */
-export function signedHeaders(
+export async function signedHeaders(
   body: string,
   {
     secret = TEST_SECRET,
     timestamp = Math.floor(Date.now() / 1000),
     id = `msg_${randomUUID()}`,
   } = {},
-): Record<string, string> {
+): Promise<Record<string, string>> {
+  const signature = await computeSignature(decodeSigningSecret(secret), id, timestamp, body);
   return {
     "content-type": "application/json",
     "webhook-id": id,
     "webhook-timestamp": String(timestamp),
-    "webhook-signature": `v1,${computeSignature(decodeSigningSecret(secret), id, timestamp, body)}`,
+    "webhook-signature": `v1,${signature}`,
   };
 }
 

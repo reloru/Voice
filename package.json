@@ -22,7 +22,11 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test"
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run typecheck:worker && npm run test",
+    "typecheck:worker": "tsc -p worker/tsconfig.json",
+    "deploy": "wrangler deploy",
+    "worker:dev": "wrangler dev",
+    "worker:tail": "wrangler tail --format pretty"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
@@ -32,6 +36,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260821.1",
     "@eslint/js": "^9.18.0",
     "@types/node": "^22.10.7",
     "@types/ws": "^8.5.13",
@@ -41,6 +46,7 @@
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.21.0",
-    "vitest": "^3.0.4"
+    "vitest": "^3.0.4",
+    "wrangler": "^4.125.0"
   }
 }

@@ -1,7 +1,7 @@
 import { loadAgentConfig } from "./config/agent.js";
 import { loadEnv } from "./config/env.js";
 import { buildServer } from "./server.js";
-import { CallStore } from "./storage/calls.js";
+import { FileCallStore } from "./storage/file.js";
 import { XaiClient } from "./xai/client.js";
 
 async function main(): Promise<void> {
@@ -12,7 +12,7 @@ async function main(): Promise<void> {
     env,
     config,
     xai: new XaiClient({ apiKey: env.XAI_API_KEY, baseUrl: env.XAI_API_BASE }),
-    store: new CallStore(env.DATA_DIR),
+    store: new FileCallStore(env.DATA_DIR),
   });
 
   const shutdown = async (signal: string): Promise<void> => {

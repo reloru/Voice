@@ -29,11 +29,17 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Typecheck
+      - name: Typecheck (Node)
         run: npm run typecheck
+
+      - name: Typecheck (Cloudflare Worker)
+        run: npm run typecheck:worker
 
       - name: Test
         run: npm test
+
+      - name: Verify the Worker bundles
+        run: npx wrangler deploy --dry-run --outdir /tmp/worker-build
 
       - name: Build
         run: npm run build

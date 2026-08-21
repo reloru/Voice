@@ -2,9 +2,10 @@ import type { CallerContext, CallRecord } from "../agent/types.js";
 import type { AgentConfig } from "../config/agent.js";
 import type { Logger } from "../logger.js";
 import type { Notifier } from "../notify.js";
-import type { CallStore } from "../storage/calls.js";
+import type { CallStore } from "../storage/store.js";
 import type { XaiClient } from "../xai/client.js";
-import { RealtimeCall, type RealtimeCallOptions } from "./call.js";
+import { RealtimeCall } from "./call.js";
+import type { ConnectRealtime } from "./socket.js";
 
 export interface CallManagerOptions {
   config: AgentConfig;
@@ -14,8 +15,8 @@ export interface CallManagerOptions {
   logger: Logger;
   apiKey: string;
   maxConcurrentCalls: number;
+  connect: ConnectRealtime;
   realtimeUrl?: string;
-  createSocket?: RealtimeCallOptions["createSocket"];
 }
 
 /**
@@ -39,15 +40,16 @@ export class CallManager {
   }
 
   /**
-   * Starts bridging a call. Resolves as soon as the socket is opening — the
-   * webhook must return promptly, so the call runs in the background and the
-   * returned promise is only for tests and shutdown.
+   * Starts bridging a call. The returned promise resolves when the call ends —
+   * the webhook handler must not await it, since xAI is holding a ringing
+   * caller while it waits for the HTTP response.
    */
   accept(callId: string, caller: CallerContext): Promise<CallRecord> {
-    if (this.#active.has(callId)) {
+    const existing = this.#active.get(callId);
+    if (existing) {
       // xAI retries webhook deliveries; a duplicate must not open a second socket.
       this.#options.logger.warn({ callId }, "ignoring duplicate call event");
-      return Promise.resolve(this.#active.get(callId)!.record);
+      return Promise.resolve(existing.record);
     }
 
     const call = new RealtimeCall({
@@ -59,8 +61,8 @@ export class CallManager {
       notifier: this.#options.notifier,
       logger: this.#options.logger,
       apiKey: this.#options.apiKey,
+      connect: this.#options.connect,
       ...(this.#options.realtimeUrl ? { realtimeUrl: this.#options.realtimeUrl } : {}),
-      ...(this.#options.createSocket ? { createSocket: this.#options.createSocket } : {}),
     });
 
     this.#active.set(callId, call);
