@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { parseAgentConfig } from "../src/config/agent.js";
 import { CallManager } from "../src/realtime/manager.js";
+import { connectWithWs } from "../src/realtime/node-socket.js";
 import { buildServer } from "../src/server.js";
-import { CallStore } from "../src/storage/calls.js";
+import { FileCallStore } from "../src/storage/file.js";
 import type { XaiClient } from "../src/xai/client.js";
 import {
   MINIMAL_CONFIG_YAML,
@@ -19,7 +20,7 @@ import {
 describe("webhook server", () => {
   let app: FastifyInstance;
   let dir: Awaited<ReturnType<typeof tempDir>>;
-  let store: CallStore;
+  let store: FileCallStore;
   let accept: ReturnType<typeof vi.fn>;
   let hangupCall: ReturnType<typeof vi.fn>;
   let manager: CallManager;
@@ -51,7 +52,7 @@ describe("webhook server", () => {
 
   beforeEach(async () => {
     dir = await tempDir();
-    store = new CallStore(dir.path);
+    store = new FileCallStore(dir.path);
   });
 
   afterEach(async () => {
@@ -76,7 +77,7 @@ describe("webhook server", () => {
       const response = await app.inject({
         method: "POST",
         url: "/webhooks/xai",
-        headers: signedHeaders(body),
+        headers: await signedHeaders(body),
         payload: body,
       });
 
@@ -88,7 +89,7 @@ describe("webhook server", () => {
     it("rejects a forged signature", async () => {
       await build();
       const body = callIncomingBody();
-      const headers = signedHeaders(body, { secret: "whsec_b3RoZXItc2VjcmV0LXZhbHVl" });
+      const headers = await signedHeaders(body, { secret: "whsec_b3RoZXItc2VjcmV0LXZhbHVl" });
 
       const response = await app.inject({
         method: "POST",
@@ -104,7 +105,7 @@ describe("webhook server", () => {
     it("rejects a body altered after signing", async () => {
       await build();
       const body = callIncomingBody({ callId: "call_1" });
-      const headers = signedHeaders(body);
+      const headers = await signedHeaders(body);
 
       const response = await app.inject({
         method: "POST",
@@ -153,7 +154,7 @@ describe("webhook server", () => {
       const response = await app.inject({
         method: "POST",
         url: "/webhooks/xai",
-        headers: signedHeaders(body),
+        headers: await signedHeaders(body),
         payload: body,
       });
 
@@ -168,7 +169,7 @@ describe("webhook server", () => {
       const response = await app.inject({
         method: "POST",
         url: "/webhooks/xai",
-        headers: signedHeaders(body),
+        headers: await signedHeaders(body),
         payload: body,
       });
       expect(response.statusCode).toBe(400);
@@ -180,7 +181,7 @@ describe("webhook server", () => {
       const response = await app.inject({
         method: "POST",
         url: "/webhooks/xai",
-        headers: signedHeaders(body),
+        headers: await signedHeaders(body),
         payload: body,
       });
       expect(response.statusCode).toBe(400);
@@ -195,7 +196,7 @@ describe("webhook server", () => {
       const response = await app.inject({
         method: "POST",
         url: "/webhooks/xai",
-        headers: signedHeaders(body),
+        headers: await signedHeaders(body),
         payload: body,
       });
 
@@ -218,7 +219,7 @@ known_callers:
       await app.inject({
         method: "POST",
         url: "/webhooks/xai",
-        headers: signedHeaders(body),
+        headers: await signedHeaders(body),
         payload: body,
       });
 
@@ -238,7 +239,7 @@ known_callers:
       const response = await app.inject({
         method: "POST",
         url: "/webhooks/xai",
-        headers: signedHeaders(body),
+        headers: await signedHeaders(body),
         payload: body,
       });
 
@@ -297,11 +298,12 @@ describe("CallManager", () => {
     const manager = new CallManager({
       config: testConfig(),
       xai: {} as XaiClient,
-      store: new CallStore("data"),
+      store: new FileCallStore("data"),
       notifier: new RecordingNotifier(),
       logger: { child: () => ({}) } as never,
       apiKey: "k",
       maxConcurrentCalls: 1,
+      connect: connectWithWs,
     });
     expect(manager.activeCount).toBe(0);
     expect(manager.atCapacity).toBe(false);
@@ -311,7 +313,7 @@ describe("CallManager", () => {
 describe("signature helper self-check", () => {
   it("produces headers this server accepts", async () => {
     const body = callIncomingBody();
-    const headers = signedHeaders(body, { secret: TEST_SECRET });
+    const headers = await signedHeaders(body, { secret: TEST_SECRET });
     expect(headers["webhook-signature"]).toMatch(/^v1,/);
   });
 });

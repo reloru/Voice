@@ -1,4 +1,3 @@
-import { WebSocket } from "ws";
 import { dispatchTool, type ToolContext } from "../agent/tools.js";
 import type {
   CallOutcome,
@@ -12,9 +11,10 @@ import type {
 import type { AgentConfig } from "../config/agent.js";
 import type { Logger } from "../logger.js";
 import type { Notifier } from "../notify.js";
-import type { CallStore } from "../storage/calls.js";
+import type { CallStore } from "../storage/store.js";
 import type { XaiClient } from "../xai/client.js";
 import { buildSessionUpdate } from "./session.js";
+import { asText, decodeFrame, type ConnectRealtime, type RealtimeSocket } from "./socket.js";
 
 export interface RealtimeCallOptions {
   callId: string;
@@ -24,11 +24,11 @@ export interface RealtimeCallOptions {
   store: CallStore;
   notifier: Notifier;
   logger: Logger;
+  apiKey: string;
+  /** Opens the socket. Node and Workers supply different implementations. */
+  connect: ConnectRealtime;
   /** Base WebSocket URL. Overridden in tests to point at a local fake server. */
   realtimeUrl?: string;
-  apiKey: string;
-  /** Injectable so tests can drive a fake socket. */
-  createSocket?: (url: string, apiKey: string) => WebSocket;
 }
 
 type PendingAction =
@@ -61,12 +61,14 @@ export class RealtimeCall {
   readonly #tools: ToolInvocation[] = [];
   readonly #messages: TakenMessage[] = [];
 
-  #socket?: WebSocket;
+  readonly #earlyFrames: unknown[] = [];
+  #socket?: RealtimeSocket;
+  #socketClosed = false;
   #pendingAction?: PendingAction;
   #responsesInFlight = 0;
   #toolsInFlight = 0;
-  #settleTimer?: NodeJS.Timeout;
-  #maxDurationTimer?: NodeJS.Timeout;
+  #settleTimer?: ReturnType<typeof setTimeout>;
+  #maxDurationTimer?: ReturnType<typeof setTimeout>;
   #outcome: CallOutcome = "completed";
   #error?: string;
   #finished = false;
@@ -80,44 +82,72 @@ export class RealtimeCall {
 
   /** Connects and resolves with the finished call record when the call ends. */
   start(): Promise<CallRecord> {
-    this.#finishedPromise ??= new Promise<CallRecord>((resolve) => {
-      const url = `${this.#options.realtimeUrl ?? DEFAULT_REALTIME_URL}?call_id=${encodeURIComponent(this.callId)}`;
-      const socket = this.#options.createSocket
-        ? this.#options.createSocket(url, this.#options.apiKey)
-        : new WebSocket(url, { headers: { Authorization: `Bearer ${this.#options.apiKey}` } });
+    this.#finishedPromise ??= this.#run();
+    return this.#finishedPromise;
+  }
 
-      this.#socket = socket;
+  async #run(): Promise<CallRecord> {
+    const base = this.#options.realtimeUrl ?? DEFAULT_REALTIME_URL;
+    const url = `${base}?call_id=${encodeURIComponent(this.callId)}`;
 
-      const maxSeconds = Math.min(this.#options.config.call.max_seconds, ABSOLUTE_MAX_CALL_SECONDS);
-      this.#maxDurationTimer = setTimeout(() => {
-        this.#logger.warn({ maxSeconds }, "call hit its duration limit");
-        this.#outcome = "timed_out";
-        this.#pendingAction = { type: "hangup", reason: "timed_out" };
-        this.#settle(0);
-      }, maxSeconds * 1000);
-
-      socket.on("open", () => this.#logger.info("realtime session connected"));
-
-      socket.on("message", (data: Buffer | ArrayBuffer | Buffer[]) => {
-        void this.#onMessage(data);
-      });
-
-      socket.on("error", (error: Error) => {
-        this.#logger.error({ err: error }, "realtime socket error");
-        this.#outcome = "failed";
-        this.#error = error.message;
-      });
-
-      socket.on("close", (code: number, reason: Buffer) => {
-        this.#logger.info(
-          { code, reason: reason?.toString().slice(0, 200) },
-          "realtime session closed",
-        );
-        void this.#finish().then(resolve);
-      });
+    let resolveClosed!: () => void;
+    const closed = new Promise<void>((resolve) => {
+      resolveClosed = resolve;
     });
 
-    return this.#finishedPromise;
+    let socket: RealtimeSocket;
+    try {
+      socket = await this.#options.connect({
+        url,
+        apiKey: this.#options.apiKey,
+        // A frame can land before this promise's continuation has run and set
+        // `#socket` — Workers in particular can deliver between `accept()` and
+        // resolution. Buffer those instead of handling them with no socket to
+        // reply on, and drain in order once we are wired up.
+        onMessage: (data) => {
+          if (this.#socket) void this.#onMessage(data);
+          else this.#earlyFrames.push(data);
+        },
+        onClose: (event) => {
+          this.#socketClosed = true;
+          this.#logger.info(
+            { code: event.code, reason: event.reason?.slice(0, 200) },
+            "realtime session closed",
+          );
+          resolveClosed();
+        },
+        onError: (message) => {
+          this.#logger.error({ err: message }, "realtime socket error");
+          this.#outcome = "failed";
+          this.#error = message;
+        },
+      });
+    } catch (error) {
+      // Never leave a caller listening to silence on a session we could not open.
+      this.#logger.error({ err: error }, "could not open realtime session");
+      this.#outcome = "failed";
+      this.#error = error instanceof Error ? error.message : String(error);
+      await this.#hangup();
+      return this.#finish();
+    }
+
+    this.#socket = socket;
+    this.#logger.info("realtime session connected");
+
+    for (const frame of this.#earlyFrames.splice(0)) {
+      await this.#onMessage(frame);
+    }
+
+    const maxSeconds = Math.min(this.#options.config.call.max_seconds, ABSOLUTE_MAX_CALL_SECONDS);
+    this.#maxDurationTimer = setTimeout(() => {
+      this.#logger.warn({ maxSeconds }, "call hit its duration limit");
+      this.#outcome = "timed_out";
+      this.#pendingAction = { type: "hangup", reason: "timed_out" };
+      this.#settle(0);
+    }, maxSeconds * 1000);
+
+    await closed;
+    return this.#finish();
   }
 
   /** Ends the call from outside, e.g. during graceful shutdown. */
@@ -126,7 +156,7 @@ export class RealtimeCall {
     this.#outcome = "failed";
     this.#error = reason;
     await this.#hangup();
-    this.#socket?.close();
+    this.#closeSocket();
   }
 
   get record(): CallRecord {
@@ -147,18 +177,16 @@ export class RealtimeCall {
 
   // --- Event handling -----------------------------------------------------
 
-  async #onMessage(data: Buffer | ArrayBuffer | Buffer[]): Promise<void> {
+  async #onMessage(data: unknown): Promise<void> {
+    const raw = decodeFrame(data);
+    if (raw === undefined) {
+      this.#logger.warn("received an undecodable frame from the realtime API");
+      return;
+    }
+
     let event: ServerEvent;
     try {
-      // `ws` hands back a Buffer, an ArrayBuffer, or — for a fragmented
-      // message — an array of Buffers. Only the first stringifies correctly on
-      // its own, so normalise before parsing.
-      const raw = Array.isArray(data)
-        ? Buffer.concat(data)
-        : Buffer.isBuffer(data)
-          ? data
-          : Buffer.from(data);
-      event = JSON.parse(raw.toString("utf8")) as ServerEvent;
+      event = JSON.parse(raw) as ServerEvent;
     } catch {
       this.#logger.warn("received a non-JSON frame from the realtime API");
       return;
@@ -188,15 +216,15 @@ export class RealtimeCall {
         return;
 
       case "response.output_audio_transcript.done":
-        this.#addTranscript("agent", text(event.transcript));
+        this.#addTranscript("agent", asText(event.transcript));
         return;
 
       case "conversation.item.input_audio_transcription.completed":
-        this.#addTranscript("caller", text(event.transcript));
+        this.#addTranscript("caller", asText(event.transcript));
         return;
 
       case "input_audio_buffer.dtmf_event_received":
-        this.#addTranscript("system", `caller pressed ${text(event.event ?? event.digit, "?")}`);
+        this.#addTranscript("system", `caller pressed ${asText(event.event ?? event.digit, "?")}`);
         return;
 
       case "input_audio_buffer.timeout_triggered":
@@ -206,7 +234,7 @@ export class RealtimeCall {
       case "error": {
         const details = (event.error ?? event) as Record<string, unknown>;
         this.#logger.error({ details }, "realtime API reported an error");
-        this.#addTranscript("system", `error: ${text(details.message, "unknown")}`);
+        this.#addTranscript("system", `error: ${asText(details.message, "unknown")}`);
         return;
       }
 
@@ -224,9 +252,9 @@ export class RealtimeCall {
   }
 
   async #onToolCall(event: ServerEvent): Promise<void> {
-    const name = text(event.name);
-    const callId = text(event.call_id);
-    const rawArguments = text(event.arguments, "{}");
+    const name = asText(event.name);
+    const callId = asText(event.call_id);
+    const rawArguments = asText(event.arguments, "{}");
 
     if (!callId) {
       this.#logger.warn({ name }, "tool call arrived without a call_id; ignoring");
@@ -303,6 +331,7 @@ export class RealtimeCall {
   async #runPendingAction(): Promise<void> {
     const action = this.#pendingAction;
     this.#pendingAction = undefined;
+    this.#settleTimer = undefined;
     if (!action) return;
 
     if (action.type === "transfer") {
@@ -311,7 +340,7 @@ export class RealtimeCall {
         this.#addTranscript("system", `transferred to ${action.targetUri} (${action.reason})`);
         this.#logger.info({ target: action.targetUri }, "call transferred");
         // The REFER moves the call away; our session is done either way.
-        this.#socket?.close();
+        this.#closeSocket();
         return;
       } catch (error) {
         // A failed transfer must not silently drop the caller — tell the model
@@ -341,7 +370,7 @@ export class RealtimeCall {
 
     this.#addTranscript("system", `call ended by agent (${action.reason})`);
     await this.#hangup();
-    this.#socket?.close();
+    this.#closeSocket();
   }
 
   async #hangup(): Promise<void> {
@@ -359,12 +388,24 @@ export class RealtimeCall {
   }
 
   #send(payload: unknown): void {
-    const socket = this.#socket;
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
+    if (!this.#socket || this.#socketClosed) {
       this.#logger.debug("dropped an outbound event; socket is not open");
       return;
     }
-    socket.send(JSON.stringify(payload));
+    try {
+      this.#socket.send(JSON.stringify(payload));
+    } catch (error) {
+      this.#logger.warn({ err: error }, "failed to send on the realtime socket");
+    }
+  }
+
+  #closeSocket(): void {
+    if (this.#socketClosed) return;
+    try {
+      this.#socket?.close();
+    } catch {
+      // Already closing; the close event still fires.
+    }
   }
 
   #addTranscript(role: TranscriptRole, text: string): void {
@@ -386,22 +427,13 @@ export class RealtimeCall {
     } catch (error) {
       this.#logger.error({ err: error }, "failed to persist call record");
     }
-    void this.#options.notifier.notify({ kind: "call.ended", call: record });
+    try {
+      await this.#options.notifier.notify({ kind: "call.ended", call: record });
+    } catch (error) {
+      this.#logger.warn({ err: error }, "call.ended notification failed");
+    }
     return record;
   }
-}
-
-/**
- * Coerce an untyped field from a server event into a string.
- *
- * Event payloads are `unknown` by construction, and a plain `String()` on an
- * object would silently produce "[object Object]" — better to fall back to the
- * default than to feed that into a transcript or a tool name.
- */
-function text(value: unknown, fallback = ""): string {
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  return fallback;
 }
 
 function safeParse(value: string): unknown {

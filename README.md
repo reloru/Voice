@@ -67,23 +67,31 @@ need to be near the caller. A small VM or a free-tier container is plenty.
 
 ## Getting a phone number
 
-There are two routes, and the API only supports one of them:
+**xAI cannot sell you a number in most areas.** The console says so plainly —
+_"Your area does not support provisioning phone numbers. Use Twilio or Direct
+SIP instead."_ — and the API refuses too, with
+`403 Provisioning SpaceXAI phone numbers via the API is not supported.`
 
-| Route                              | How                                                                                                                                                         | Use when                                                                                                                                                    |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **xAI-provisioned**                | Console only — [console.x.ai](https://console.x.ai) → Voice Agents. The API returns `403 Provisioning SpaceXAI phone numbers via the API is not supported.` | You just want a number, fast. Easiest path.                                                                                                                 |
-| **Bring your own (BYO SIP trunk)** | `npm run cli -- numbers register`                                                                                                                           | You already own a number (Twilio, Telnyx, your PBX) or want to port your real number. Point that carrier's SIP trunk at the `sip_host` the command returns. |
+That changes nothing about this server. However the number is obtained, calls
+arrive here as the same signed `realtime.call.incoming` webhook.
 
-Either way, the number has to be pointed at **this server's webhook URL**.
-For a console-created number, set the webhook there, or afterwards with:
+Three routes, easiest first:
+
+| Route                    | How                                                                                                                                                                                                       | Cost                             |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| **Twilio** (recommended) | Buy a number on Twilio, then console.x.ai → Voice Agents → New phone number → **Twilio** tab → paste Account SID, Auth Token, and the number. xAI wires up the SIP trunk for you.                         | ~$1.15/mo + ~$0.0085/min inbound |
+| **Direct SIP**           | Any carrier or PBX you already own. The console's **Direct SIP** tab gives you the SIP URI (`sip:{number}@sip.voice.x.ai`) to point your trunk at, plus optional digest auth and an allowed-address list. | your carrier's rates             |
+| **xAI-provisioned**      | Console only, where offered. Not available in most areas today.                                                                                                                                           | xAI telephony rates              |
+
+Once the number exists on your team, point it at this server:
 
 ```bash
-npm run cli -- numbers set-webhook --id phone_xxx --url https://your-host/webhooks/xai
+npm run cli -- numbers set-webhook --id phone_xxx --url https://<your-host>/webhooks/xai
 ```
 
 xAI returns a `dispatch_signing_secret` (`whsec_…`) **exactly once** when the
 webhook is created. That value is `XAI_WEBHOOK_SECRET`. Save it immediately — it
-cannot be retrieved later, and without it this server refuses to start.
+cannot be retrieved later, and without it this server rejects every delivery.
 
 ---
 
@@ -179,8 +187,33 @@ your API key, and whether your numbers are actually routed anywhere.
 
 ## Deploying
 
-See [docs/DEPLOYING.md](docs/DEPLOYING.md). The short version: it is a stateless
-HTTP server with one webhook route, so anything that runs a container works.
+Two supported targets. Full instructions in [docs/DEPLOYING.md](docs/DEPLOYING.md).
+
+### Cloudflare Workers (recommended)
+
+Always-on, free tier, permanent HTTPS URL, nothing to keep running on your own
+machine. The webhook is a Worker; each live call runs in a **Durable Object**,
+which is what lets a WebSocket stay open for the length of a phone call.
+
+```bash
+npx wrangler deploy
+npx wrangler secret put XAI_API_KEY
+npx wrangler secret put XAI_WEBHOOK_SECRET
+npx wrangler secret put DASHBOARD_TOKEN     # guards /calls, /messages, /selftest
+```
+
+The agent config lives in KV under the key `agent.yaml`, so the persona,
+greeting, knowledge and blocklist can be edited straight from the Cloudflare
+dashboard — **no terminal, no redeploy**. An invalid edit is logged and the
+Worker falls back to the bundled default rather than dropping calls.
+
+`POST /selftest` (with the dashboard token) opens a real realtime session from
+the Durable Object and reports what came back — the fastest way to confirm the
+deployment can actually reach xAI.
+
+### Node / Docker
+
+Same code, same behaviour, if you would rather self-host.
 
 ```bash
 docker build -t voice-agent .
@@ -238,17 +271,25 @@ npm run cli -- simulate-call
 
 ## Layout
 
+The call logic is runtime-agnostic: signature verification uses Web Crypto and
+the call bridge is written against the standard WebSocket event API, so the
+same code drives a call on Node and inside a Durable Object.
+
 ```
-src/
-  config/     env + agent.yaml schemas (zod)
-  webhooks/   signature verification, event parsing
-  realtime/   WebSocket call bridge, session builder, concurrency manager
-  agent/      persona builder, tool definitions and dispatch
-  storage/    JSONL call and message store
-  xai/        REST client (call control + phone numbers)
-  server.ts   Fastify app
-  cli.ts      voice-agent CLI
-tests/        128 tests, incl. a fake realtime server driving full calls
+src/                  shared core — runs on both Node and Workers
+  config/             env + agent.yaml schemas (zod)
+  webhooks/           Standard Webhooks verification, event parsing
+  realtime/           call bridge, session builder, socket abstraction
+  agent/              persona builder, tool definitions and dispatch
+  storage/            CallStore interface + JSONL implementation
+  xai/                REST client (call control + phone numbers)
+  server.ts           Fastify app (Node)
+  cli.ts              voice-agent CLI
+worker/               Cloudflare Workers entry
+  index.ts            webhook handler and read-only endpoints
+  call-session.ts     Durable Object holding one call's WebSocket
+  kv-store.ts         CallStore backed by Workers KV
+tests/                134 tests, incl. a fake realtime server driving full calls
 ```
 
 ## License

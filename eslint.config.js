@@ -23,6 +23,13 @@ export default tseslint.config(
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
       "@typescript-eslint/consistent-type-imports": "error",
+      // A forgotten `await` once put "[object Promise]" into a webhook
+      // signature header. These two catch that class of bug at lint time.
+      "@typescript-eslint/restrict-template-expressions": [
+        "error",
+        { allowNumber: true, allowBoolean: true, allowNever: false },
+      ],
+      "@typescript-eslint/no-floating-promises": "error",
       "no-console": "off",
     },
   },

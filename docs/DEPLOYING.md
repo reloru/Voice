@@ -13,6 +13,63 @@ directly, never through this process.
 
 ## 1. Get the server reachable
 
+### Cloudflare Workers (recommended)
+
+Free tier, always on, permanent HTTPS URL, and nothing running on your own
+machine. The webhook handler is a Worker; each live call runs inside a
+**Durable Object**, because a plain Worker invocation cannot hold a WebSocket
+open for the length of a phone call.
+
+```bash
+npx wrangler deploy
+npx wrangler secret put XAI_API_KEY
+npx wrangler secret put XAI_WEBHOOK_SECRET
+npx wrangler secret put DASHBOARD_TOKEN        # openssl rand -hex 32
+npx wrangler secret put NOTIFY_WEBHOOK_URL     # optional
+```
+
+`wrangler deploy` prints the URL. The webhook path is `/webhooks/xai`.
+
+**Editing the agent without a terminal.** The config lives in KV under the key
+`agent.yaml`. Change it in the Cloudflare dashboard at _Workers & Pages → KV →
+VOICE_KV → agent.yaml_; it applies to the next call, with no redeploy. If you
+save something invalid the Worker logs the error and falls back to the bundled
+default rather than dropping calls. The same thing over HTTP:
+
+```bash
+curl -X PUT https://<your-worker>/config \
+  -H "Authorization: Bearer $DASHBOARD_TOKEN" \
+  --data-binary @agent.yaml          # validates before storing; 400 if invalid
+```
+
+**Confirming it works**, without needing a phone number:
+
+```bash
+curl https://<your-worker>/healthz
+curl -X POST https://<your-worker>/selftest -H "Authorization: Bearer $DASHBOARD_TOKEN"
+```
+
+`/selftest` opens a real realtime session from the Durable Object, asks Grok for
+one word, and reports the transcript, audio size, and every event it saw. If
+that returns `"ok": true`, the deployment can reach xAI and hold a WebSocket —
+which is the only part that is hard.
+
+Live logs:
+
+```bash
+npx wrangler tail --format pretty
+```
+
+Notes specific to this target:
+
+- Records are stored in KV with a 30-day TTL, newest-first by key prefix.
+  Transcripts are personal data; the TTL is deliberate.
+- The Durable Object is addressed by `call_id`, so xAI's webhook retries are
+  idempotent — a repeat delivery hits the same instance, which refuses to open
+  a second session.
+- `MAX_CONCURRENT_CALLS` does not apply here; each call gets its own object.
+  xAI's own ceiling of 100 concurrent sessions per team is the real limit.
+
 ### Local, for testing
 
 ```bash
@@ -79,30 +136,42 @@ webhook, and xAI is holding a ringing caller while it waits.
 Render, Railway, Cloud Run, a $5 VPS behind Caddy — all fine. Requirements are
 only: HTTPS, a stable URL, and the process not being suspended between calls.
 
-## 2. Point a number at it
+## 2. Get a number and point it here
+
+xAI will not provision a number in most areas — the console says _"Your area
+does not support provisioning phone numbers. Use Twilio or Direct SIP instead."_
+and the API returns 403. Both alternatives work identically from this server's
+point of view.
+
+**Twilio (easiest).** Sign up at twilio.com, buy a local number (~$1.15/mo,
+~$0.0085/min inbound), then in console.x.ai → Voice Agents → New phone number →
+**Twilio** tab, paste the Account SID, Auth Token, and the number. xAI
+configures the SIP trunk for you.
+
+**Direct SIP.** Use a number from any carrier or your own PBX. The console's
+**Direct SIP** tab shows the SIP URI to route to
+(`sip:{number}@sip.voice.x.ai;transport=…`), an allowed-address list, and
+optional digest auth. The same thing over the API:
 
 ```bash
-# Number created in the xAI console (console.x.ai → Voice Agents)
-npm run cli -- numbers set-webhook --id phone_xxx --url https://your-host/webhooks/xai
-
-# Or a number you already own, on your own SIP trunk
 npm run cli -- numbers register \
   --number +15551234567 \
   --url https://your-host/webhooks/xai \
-  --name "screening line"
+  --name "screening line" \
+  --sip-user myuser --sip-pass "$(openssl rand -hex 24)"
+```
+
+Then point whichever number you ended up with at this server:
+
+```bash
+npm run cli -- numbers set-webhook --id phone_xxx --url https://your-host/webhooks/xai
+npm run cli -- numbers list          # confirm it is routed
 ```
 
 `register` prints the `sip_host` to point your carrier's trunk at, and the
-`dispatch_signing_secret` — **shown once**. Put it in `XAI_WEBHOOK_SECRET` and
-restart before the next call arrives.
-
-Lock the trunk down while you are there:
-
-```bash
-npm run cli -- numbers register ... \
-  --sip-user myuser --sip-pass "$(openssl rand -hex 24)" \
-  --allow-cidr 203.0.113.10/32
-```
+`dispatch_signing_secret` — **shown once**. Put it in `XAI_WEBHOOK_SECRET`
+before the next call arrives. Add `--allow-cidr 203.0.113.10/32` (repeatable)
+to accept INVITEs only from your carrier's addresses.
 
 ## 3. Forward your real number
 

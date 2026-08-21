@@ -5,7 +5,8 @@ import type { Env } from "./config/env.js";
 import type { Logger } from "./logger.js";
 import { createNotifier, type Notifier } from "./notify.js";
 import { CallManager } from "./realtime/manager.js";
-import type { CallStore } from "./storage/calls.js";
+import { connectWithWs } from "./realtime/node-socket.js";
+import type { CallStore } from "./storage/store.js";
 import {
   callIncomingEventSchema,
   callerContextFromEvent,
@@ -59,6 +60,7 @@ export async function buildServer(options: BuildServerOptions): Promise<Server> 
       logger,
       apiKey: env.XAI_API_KEY,
       maxConcurrentCalls: env.MAX_CONCURRENT_CALLS,
+      connect: connectWithWs,
     });
 
   /**
@@ -80,7 +82,7 @@ export async function buildServer(options: BuildServerOptions): Promise<Server> 
     const rawBody = typeof request.body === "string" ? request.body : "";
 
     if (env.XAI_WEBHOOK_SECRET) {
-      const result = verifyWebhookSignature({
+      const result = await verifyWebhookSignature({
         payload: rawBody,
         headers: request.headers,
         secret: env.XAI_WEBHOOK_SECRET,

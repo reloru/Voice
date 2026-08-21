@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { AgentConfig } from "../config/agent.js";
 import type { Logger } from "../logger.js";
 import type { Notifier } from "../notify.js";
-import type { CallStore } from "../storage/calls.js";
+import type { CallStore } from "../storage/store.js";
 import type { CallerContext, TakenMessage } from "./types.js";
 
 export interface ToolDefinition {
