@@ -1,0 +1,14 @@
+node_modules
+dist
+coverage
+data
+tests
+.git
+.github
+.env
+.env.*
+!.env.example
+agent.yaml
+*.log
+README.md
+docs

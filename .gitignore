@@ -1,0 +1,23 @@
+# Secrets — never commit these.
+.env
+.env.*
+!.env.example
+
+# Your real agent config holds known callers' phone numbers and your blocklist.
+# agent.example.yaml is the version that ships.
+agent.yaml
+
+# Call transcripts and messages contain personal information.
+data/
+*.jsonl
+
+node_modules/
+dist/
+coverage/
+
+*.log
+npm-debug.log*
+
+.DS_Store
+.idea/
+.vscode/

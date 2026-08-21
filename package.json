@@ -1,0 +1,46 @@
+{
+  "name": "voice-phone-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A Grok-powered voice agent that answers a real phone number over xAI's SIP + Realtime API.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "bin": {
+    "voice-agent": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "cli": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "fastify": "^5.2.1",
+    "ws": "^8.18.0",
+    "yaml": "^2.7.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.18.0",
+    "@types/node": "^22.10.7",
+    "@types/ws": "^8.5.13",
+    "eslint": "^9.18.0",
+    "eslint-config-prettier": "^10.0.1",
+    "prettier": "^3.4.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.21.0",
+    "vitest": "^3.0.4"
+  }
+}
